@@ -130,7 +130,7 @@ const About = () => {
               Everything you need.
               <br />
               <span className="text-teal-500">
-                Nothing you don't.
+                Nothing you dont.
               </span>
             </h2>
 
