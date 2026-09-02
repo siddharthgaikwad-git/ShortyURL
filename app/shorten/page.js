@@ -1,31 +1,57 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 
 const Shorten = () => {
   const [url, seturl] = useState("");
   const [shorturl, setshorturl] = useState("");
   const [generated, setGenerated] = useState("");
+  const [generatedLinks, setGeneratedLinks] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState("");
   const [error, setError] = useState("");
+  const [existingUrl, setExistingUrl] = useState("");
+
+  // Restore all previously generated links
+  useEffect(() => {
+    const savedLinks = localStorage.getItem("generatedShortUrls");
+
+    if (savedLinks) {
+      try {
+        const links = JSON.parse(savedLinks);
+
+        if (Array.isArray(links)) {
+          setGeneratedLinks(links);
+
+          if (links.length > 0) {
+            setGenerated(links[0].shortUrl);
+          }
+        }
+      } catch (error) {
+        console.error("Unable to restore saved links:", error);
+        localStorage.removeItem("generatedShortUrls");
+      }
+    }
+  }, []);
 
   const generate = async () => {
     if (!url.trim()) {
       setError("Please enter a URL first.");
+      setExistingUrl("");
       return;
     }
 
     if (!shorturl.trim()) {
       setError("Please choose your preferred short URL.");
+      setExistingUrl("");
       return;
     }
 
     setError("");
+    setExistingUrl("");
     setLoading(true);
-    setGenerated("");
-    setCopied(false);
+    setCopied("");
 
     try {
       const response = await fetch("/api/generate", {
@@ -34,38 +60,119 @@ const Shorten = () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          url: url,
-          shorturl: shorturl,
+          url: url.trim(),
+          shorturl: shorturl.trim(),
         }),
       });
 
-      const result = await response.json();
+      let result;
 
+      try {
+        result = await response.json();
+      } catch {
+        throw new Error("Server returned an invalid response.");
+      }
+
+      console.log("API response:", result);
+
+      // Server error
+      if (!response.ok) {
+        setError(
+          result?.message ||
+            "Unable to create your short URL. Please try again."
+        );
+        return;
+      }
+
+      // New URL created successfully
       if (result.success) {
-        setGenerated(`${process.env.NEXT_PUBLIC_HOST}/${shorturl}`);
+        const generatedUrl = `${window.location.origin}/${shorturl.trim()}`;
+
+        const newLink = {
+          shortUrl: generatedUrl,
+          originalUrl: url.trim(),
+        };
+
+        // Read the latest links directly from localStorage
+        const savedLinks = localStorage.getItem("generatedShortUrls");
+
+        let existingLinks = [];
+
+        if (savedLinks) {
+          try {
+            const parsedLinks = JSON.parse(savedLinks);
+
+            if (Array.isArray(parsedLinks)) {
+              existingLinks = parsedLinks;
+            }
+          } catch (error) {
+            console.error("Unable to read saved links:", error);
+          }
+        }
+
+        // Add new link at the beginning
+        const updatedLinks = [newLink, ...existingLinks];
+
+        setGenerated(generatedUrl);
+        setGeneratedLinks(updatedLinks);
+
+        // Save all links
+        localStorage.setItem(
+          "generatedShortUrls",
+          JSON.stringify(updatedLinks)
+        );
+
+        // Clear inputs
         seturl("");
         setshorturl("");
-      } else {
+      }
+
+      // Short URL already exists
+      else if (result.exists) {
+        const existingShortUrl =
+          `${window.location.origin}/${result.shorturl}`;
+
+        setExistingUrl(existingShortUrl);
+        setError(
+          result.message || "This short URL already exists."
+        );
+      }
+
+      // Other API error
+      else {
         setError(result.message || "Something went wrong.");
       }
     } catch (error) {
-      console.error(error);
-      setError("Unable to create your short URL. Please try again.");
+      console.error("Generate URL error:", error);
+
+      if (error.message === "Failed to fetch") {
+        setError(
+          "Unable to connect to the server. Please try again."
+        );
+      } else {
+        setError(
+          "Unable to create your short URL. Please try again."
+        );
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const copyLink = async () => {
+  const copyLink = async (link) => {
+    if (!link) return;
+
     try {
-      await navigator.clipboard.writeText(generated);
-      setCopied(true);
+      await navigator.clipboard.writeText(link);
+
+      setCopied(link);
 
       setTimeout(() => {
-        setCopied(false);
+        setCopied("");
       }, 2000);
     } catch (error) {
-      console.error(error);
+      console.error("Copy failed:", error);
+      setError("Unable to copy the link. Please copy it manually.");
     }
   };
 
@@ -111,7 +218,12 @@ const Shorten = () => {
               value={url}
               type="url"
               placeholder="https://example.com/my-long-url"
-              onChange={(e) => seturl(e.target.value)}
+              onChange={(e) => {
+                seturl(e.target.value);
+                setError("");
+                setExistingUrl("");
+              }}
+              disabled={loading}
               className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3.5 text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-teal-400 focus:bg-white focus:ring-4 focus:ring-teal-500/10"
             />
           </div>
@@ -132,17 +244,49 @@ const Shorten = () => {
                 value={shorturl}
                 type="text"
                 placeholder="my-link"
-                onChange={(e) => setshorturl(e.target.value)}
+                onChange={(e) => {
+                  setshorturl(e.target.value);
+                  setError("");
+                  setExistingUrl("");
+                }}
+                disabled={loading}
                 className="min-w-0 flex-1 bg-transparent px-3 py-3.5 text-slate-800 outline-none placeholder:text-slate-400 sm:px-4"
               />
 
             </div>
           </div>
 
-          {/* Error */}
+          {/* Error / Existing URL */}
           {error && (
-            <div className="mt-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-medium text-red-600">
-              {error}
+            <div
+              className={`mt-4 rounded-xl border px-4 py-3 text-sm font-medium ${
+                existingUrl
+                  ? "border-amber-100 bg-amber-50 text-amber-700"
+                  : "border-red-100 bg-red-50 text-red-600"
+              }`}
+            >
+              <div>{error}</div>
+
+              {existingUrl && (
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+
+                  <Link
+                    href={existingUrl}
+                    target="_blank"
+                    className="flex-1 rounded-lg bg-white px-4 py-2 text-center text-sm font-bold text-teal-600 shadow-sm transition hover:bg-teal-50"
+                  >
+                    Open existing link →
+                  </Link>
+
+                  <button
+                    onClick={() => copyLink(existingUrl)}
+                    className="rounded-lg bg-teal-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700"
+                  >
+                    {copied === existingUrl ? "Copied ✓" : "Copy"}
+                  </button>
+
+                </div>
+              )}
             </div>
           )}
 
@@ -192,11 +336,56 @@ const Shorten = () => {
                 </Link>
 
                 <button
-                  onClick={copyLink}
+                  onClick={() => copyLink(generated)}
                   className="rounded-xl bg-teal-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-teal-700"
                 >
-                  {copied ? "Copied ✓" : "Copy"}
+                  {copied === generated ? "Copied ✓" : "Copy"}
                 </button>
+
+              </div>
+
+            </div>
+          )}
+
+          {/* Generated links history */}
+          {generatedLinks.length > 1 && (
+            <div className="mt-6">
+
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-700">
+                  Recent links
+                </span>
+
+                <span className="text-xs font-medium text-slate-400">
+                  {generatedLinks.length} links
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-2">
+
+                {generatedLinks.slice(1).map((link, index) => (
+                  <div
+                    key={`${link.shortUrl}-${index}`}
+                    className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2"
+                  >
+
+                    <Link
+                      href={link.shortUrl}
+                      target="_blank"
+                      className="min-w-0 flex-1 truncate px-2 py-2 text-sm font-semibold text-teal-600 transition hover:text-teal-700"
+                    >
+                      {link.shortUrl}
+                    </Link>
+
+                    <button
+                      onClick={() => copyLink(link.shortUrl)}
+                      className="shrink-0 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-600 shadow-sm transition hover:bg-teal-600 hover:text-white"
+                    >
+                      {copied === link.shortUrl ? "Copied ✓" : "Copy"}
+                    </button>
+
+                  </div>
+                ))}
 
               </div>
 
